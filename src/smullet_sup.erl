@@ -3,22 +3,29 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/2, start_link/3, start_child/2]).
+-export([start_link/3, start_child/2, spec/3]).
 
 %% Supervisor callbacks
 -export([init/1]).
 
 
-start_link(Timeout, Module) ->
-    supervisor:start_link(?MODULE, [Timeout, Module]).
+spec(Group, Timeout, Module) ->
+    {group_to_sup(Group),
+     {?MODULE, start_link, [Group, Timeout, Module]},
+     permanent, infinity, supervisor, [smullet_sup]}.
 
 
-start_link(SupervisorName, Timeout, Module) ->
-    supervisor:start_link({local, SupervisorName}, ?MODULE, [Timeout, Module]).
+start_link(Group, Timeout, Module) ->
+    supervisor:start_link({local, group_to_sup(Group)}, ?MODULE, [Timeout, Module]).
 
 
-start_child(Supervisor, Key) ->
-    supervisor:start_child(Supervisor, [Key]).
+group_to_sup(Group) ->
+    GroupId = lists:flatten(io_lib:format("smullet_group_~p", [Group])),
+    list_to_atom(GroupId).
+
+
+start_child(Group, Key) ->
+    supervisor:start_child(group_to_sup(Group), [Key]).
 
 
 init(Params) ->

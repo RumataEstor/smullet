@@ -4,7 +4,7 @@
 %% API
 -export([start_link/3]).
 -export([new/2, ensure_started/2]).
--export([find/1, send/3, recv/1]).
+-export([find/2, send/3, recv/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -12,10 +12,11 @@
 
 %% define smullet_session behaviour with following callbacks
 -type state() :: term().
--callback init(Key) -> {ok, State} | ignore | {stop, Reason}
-                           when Key :: term(),
-                                State :: state(),
-                                Reason :: term().
+-callback init(Group, Key) -> {ok, State} | ignore | {stop, Reason}
+                                  when Group :: term(),
+                                       Key :: term(),
+                                       State :: state(),
+                                       Reason :: term().
 -callback handle_info(Msg, State) -> {noreply, State}
                                          | {noreply, State, Timeout}
                                          | {stop, Reason, State}
@@ -32,18 +33,18 @@
 -record(state, {handler, module, state, messages, timeout, ref}).
 -define(ERROR(Format, Params), error_logger:error_msg("[~p:~p ~p] " ++ Format,
                                                       [?MODULE, ?LINE, self()] ++ Params)).
--define(gproc_key(Key), {n, l, {smullet, Key}}).
+-define(gproc_key(Group, Key), {n, l, {smullet, Group, Key}}).
 -define(inactive_message(Timer), {timeout, Timer, inactive_message}).
 
 
 %% @doc Creates a new session under specified supervisor using SessionKey.
 %%      If the key is not unique returns an error.
--spec new(Supervisor, SessionKey) -> {ok, session()} | {error, _}
-                                         when Supervisor :: atom() | pid(),
-                                              SessionKey :: term().
-new(Supervisor, SessionKey) ->
-    GProcKey = ?gproc_key(SessionKey),
-    case smullet_sup:start_child(Supervisor, GProcKey) of
+-spec new(SessionGroup, SessionKey) -> {ok, session()} | {error, _}
+                                          when SessionGroup :: term(),
+                                               SessionKey :: term().
+new(SessionGroup, SessionKey) ->
+    GProcKey = ?gproc_key(SessionGroup, SessionKey),
+    case smullet_sup:start_child(SessionGroup, GProcKey) of
         {error, {shutdown, Reason}} ->
             {error, Reason};
         Other ->
@@ -53,22 +54,24 @@ new(Supervisor, SessionKey) ->
 
 %% @doc Returns an existing session associated with SessionKey
 %%      or undefined if no such session exists.
--spec find(SessionKey) -> undefined | session() when SessionKey :: term().
-find(SessionKey) ->
-    Key = ?gproc_key(SessionKey),
+-spec find(SessionGroup, SessionKey) -> undefined | session()
+                                           when SessionGroup :: term(),
+                                                SessionKey :: term().
+find(SessionGroup, SessionKey) ->
+    Key = ?gproc_key(SessionGroup, SessionKey),
     gproc:where(Key).
 
 
 %% @doc Returns an existing session associated with SessionKey
 %%      or creates a new session under specified supervisor.
--spec ensure_started(Supervisor, SessionKey) -> session()
-                                                    when Supervisor :: atom() | pid(),
-                                                         SessionKey :: term().
-ensure_started(Supervisor, SessionKey) ->
-    GProcKey = ?gproc_key(SessionKey),
+-spec ensure_started(SessionGroup, SessionKey) -> session()
+                                                     when SessionGroup :: term(),
+                                                          SessionKey :: term().
+ensure_started(SessionGroup, SessionKey) ->
+    GProcKey = ?gproc_key(SessionGroup, SessionKey),
     case gproc:where(GProcKey) of
         undefined ->
-            case smullet_sup:start_child(Supervisor, GProcKey) of
+            case smullet_sup:start_child(SessionGroup, GProcKey) of
                 {ok, Pid} ->
                     Pid;
                 {error, {already_registered, OtherPid}} ->
@@ -119,8 +122,8 @@ start_link(Timeout, Module, GProcKey) ->
 init({GProcKey, Timeout, Module}) ->
     case gproc:reg_or_locate(GProcKey) of
         {Pid, _} when Pid =:= self() ->
-            ?gproc_key(SessionKey) = GProcKey,
-            case Module:init(SessionKey) of
+            ?gproc_key(SessionGroup, SessionKey) = GProcKey,
+            case Module:init(SessionGroup, SessionKey) of
                 {ok, State} ->
                     {ok, start_timer(#state{module=Module, state=State,
                                             messages=queue:new(), timeout=Timeout})};

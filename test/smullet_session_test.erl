@@ -2,12 +2,13 @@
 -behavoiur(smullet_session).
 
 %% smullet_session callbacks
--export([init/1, handle_info/2, terminate/2]).
+-export([init/2, handle_info/2, terminate/2]).
 
 -include_lib("eunit/include/eunit.hrl").
 -include("assert_ex.hrl").
 
 -define(t, 200).
+-define(GROUP, {?MODULE, 1}).
 -define(last_state, {p, l, ?MODULE}).
 -define(assertRef(Expression), ?assertMatchR(Ref, is_reference(Ref), Expression)).
 
@@ -25,21 +26,21 @@ sessions_test_() ->
 
 
 undelivered_fail() ->
-    ?assertMatchEx({ok, S}, smullet_session:new(?MODULE, 3)),
+    ?assertMatchEx({ok, S}, smullet_session:new(?GROUP, 3)),
     ?assertExit({timeout, _}, smullet_session:send(S, undelivered, 100)).
 
 
 dead_session() ->
-    ?assertMatchEx({ok, S}, smullet_session:new(?MODULE, 4)),
+    ?assertMatchEx({ok, S}, smullet_session:new(?GROUP, 4)),
     ?assertExit({{shutdown, inactive}, _}, smullet_session:send(S, undelivered, infinity)).
 
 
 sessions() ->
     %% create sessions
-    ?assertMatchEx({ok, S1}, smullet_session:new(?MODULE, 1)),
+    ?assertMatchEx({ok, S1}, smullet_session:new(?GROUP, 1)),
     ?assertMatch({init, 1}, st()),
-    ?assertMatch({error, {already_registered, S1}}, smullet_session:new(?MODULE, 1)),
-    ?assertMatchEx({ok, S2}, smullet_session:new(?MODULE, 2)),
+    ?assertMatch({error, {already_registered, S1}}, smullet_session:new(?GROUP, 1)),
+    ?assertMatchEx({ok, S2}, smullet_session:new(?GROUP, 2)),
     ?assertMatch({init, 2}, st()),
 
     %% subscribe for messages
@@ -63,15 +64,15 @@ sessions() ->
 
     %% session is terminated due to inactivity
     ?assertMatch(ok, timer:sleep(?t + ?t)),
-    ?assertMatch(undefined, smullet_session:find(1)),
+    ?assertMatch(undefined, smullet_session:find(?GROUP, 1)),
     ?assertExit({noproc, _}, smullet_session:send(S1, m3, infinity)),
 
     %% but second is alive because was subscribed to
-    ?assertMatchEx(ok, smullet_session:send(smullet_session:find(2), n1, infinity)),
+    ?assertMatchEx(ok, smullet_session:send(smullet_session:find(?GROUP, 2), n1, infinity)),
     ?assertMatch({msg, {Ref2, n1}}, msg()).
 
 
-init(Key) ->
+init(?GROUP, Key) ->
     gproc:set_value_shared(?last_state, {init, Key}),
     {ok, undefined}.
 
@@ -89,7 +90,7 @@ st() ->
 setup() ->
     application:start(gproc),
     gproc:reg_shared(?last_state),
-    {ok, Pid} = smullet_sup:start_link(?MODULE, ?t, ?MODULE),
+    {ok, Pid} = smullet_sup:start_link(?GROUP, ?t, ?MODULE),
     Pid.
 
 
