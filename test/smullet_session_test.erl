@@ -2,7 +2,7 @@
 -behavoiur(smullet_session).
 
 %% smullet_session callbacks
--export([init/2, handle_info/2, terminate/2]).
+-export([init/2, handle_call/3, handle_cast/2, handle_info/2, terminate/3]).
 
 -include_lib("eunit/include/eunit.hrl").
 -include("assert_ex.hrl").
@@ -75,6 +75,12 @@ sessions() ->
 init(?GROUP, Key) ->
     gproc:set_value_shared(?last_state, {init, Key}),
     {ok, undefined}.
+
+handle_call(_, _, State) ->
+    {noreply, State}.
+
+handle_cast(_, State) ->
+    {noreply, State}.
 
 handle_info(_, State) ->
     {noreply, State}.
