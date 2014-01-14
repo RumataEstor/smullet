@@ -30,7 +30,7 @@
 
 -callback handle_info(Info :: term(), State :: term()) -> gen_noreply().
 
--callback terminate(Reason :: term(), State :: term()) -> term().
+-callback terminate(Reason :: term(), Messages :: [term()], State :: term()) -> term().
 
 -opaque session() :: pid().
 -export_type([session/0]).
@@ -264,8 +264,8 @@ handle_info(Info, #state{module=Module, state=MState} = State) ->
 
 
 %% @private
-terminate(Reason, #state{module=Module, state=MState}) ->
-    Module:terminate(Reason, MState).
+terminate(Reason, #state{module=Module, messages=Messages, state=MState}) ->
+    Module:terminate(Reason, Messages, MState).
 
 
 %% @private

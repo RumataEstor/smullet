@@ -85,7 +85,7 @@ handle_cast(_, State) ->
 handle_info(_, State) ->
     {noreply, State}.
 
-terminate(_, _State) ->
+terminate(_, _Messages, _State) ->
     ok.
 
 
