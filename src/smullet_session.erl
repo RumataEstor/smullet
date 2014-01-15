@@ -5,36 +5,43 @@
 -export([start_link/3]).
 -export([new/2, ensure_started/2]).
 -export([find/2, send/3, recv/1]).
+-export([call/2, call/3, cast/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
 %% define smullet_session behaviour with following callbacks
--type state() :: term().
--callback init(Group, Key) -> {ok, State} | ignore | {stop, Reason}
-                                  when Group :: term(),
-                                       Key :: term(),
-                                       State :: state(),
-                                       Reason :: term().
--callback handle_info(Msg, State) -> {noreply, State}
-                                         | {noreply, State, Timeout}
-                                         | {stop, Reason, State}
-                                         when Msg :: term(),
-                                              State :: state(),
-                                              Timeout :: timeout(),
-                                              Reason :: term().
--callback terminate(Reason, State) -> ok when Reason :: term(),
-                                              State :: state().
+-callback init(Group :: term(), Key :: term()) -> {ok, State :: term()} |
+                                                  {stop, Reason :: term()} |
+                                                  ignore.
+
+-type gen_noreply() :: {noreply, NewState :: term()} |
+                       {noreply, NewState :: term(), Timeout :: timeout() | hibernate} |
+                       {stop, Reason :: term(), NewState :: term()}.
+
+-callback handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
+    {reply, Reply :: term(), NewState :: term()} |
+    {reply, Reply :: term(), NewState :: term(), Timeout :: timeout() | hibernate} |
+    {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
+    gen_noreply().
+
+-callback handle_cast(Request :: term(), State :: term()) -> gen_noreply().
+
+-callback handle_info(Info :: term(), State :: term()) -> gen_noreply().
+
+-callback terminate(Reason :: term(), Messages :: [term()], State :: term()) -> term().
 
 -opaque session() :: pid().
--export_type([session/0, state/0]).
+-export_type([session/0]).
 
 -record(state, {handler, module, state, messages, timeout, ref}).
 -define(ERROR(Format, Params), error_logger:error_msg("[~p:~p ~p] " ++ Format,
                                                       [?MODULE, ?LINE, self()] ++ Params)).
 -define(gproc_key(Group, Key), {n, l, {smullet, Group, Key}}).
 -define(inactive_message(Timer), {timeout, Timer, inactive_message}).
+-define(send(Msg, Type), {'$smullet_send', Msg, Type}).
+-define(recv, '$smullet_recv').
 
 
 %% @doc Creates a new session under specified supervisor using SessionKey.
@@ -85,19 +92,19 @@ ensure_started(SessionGroup, SessionKey) ->
 %% @doc Delivers a message to a subscribed handler or stores until
 %%      such handler subscribes. If no handler appears until session
 %%      is terminated due to inactivity ALL SUCH MESSAGES ARE LOST!
-%%      If `Timeout' is `async' then function returnes immediately
+%%      If `Timeout' is `async' then function returns immediately
 %%      after the message is stored for the delivery. Otherwise
 %%      function returns after the message is delivered to the handler
 %%      or fails if it is not delivered in that amount of time.
 -spec send(session(), Msg, Timeout) -> ok when Msg :: term(),
                                                Timeout :: timeout() | async | infinity.
 send(Session, Msg, async) when is_pid(Session) ->
-    gen_server:call(Session, {send, Msg, async});
+    gen_server:call(Session, ?send(Msg, async));
 send(Session, Msg, infinity) when is_pid(Session) ->
-    gen_server:call(Session, {send, Msg, infinity}, infinity);
+    gen_server:call(Session, ?send(Msg, infinity), infinity);
 send(Session, Msg, Timeout) when is_pid(Session) ->
     WaitTill = milliseconds() + Timeout,
-    gen_server:call(Session, {send, Msg, WaitTill}, Timeout).
+    gen_server:call(Session, ?send(Msg, WaitTill), Timeout).
 
 
 milliseconds() ->
@@ -110,7 +117,20 @@ milliseconds() ->
 %%      message queue as `{Tag, Msg}'.
 -spec recv(session()) -> Tag when Tag :: reference().
 recv(Session) when is_pid(Session) ->
-    gen_server:call(Session, recv).
+    gen_server:call(Session, ?recv).
+
+
+%% @doc The same as `gen_server:call/2'.
+call(Session, Request) ->
+    gen_server:call(Session, Request).
+
+%% @doc The same as `gen_server:call/3'.
+call(Session, Request, Timeout) ->
+    gen_server:call(Session, Request, Timeout).
+
+%% @doc The same as `gen_server:cast/2'.
+cast(Session, Request) ->
+    gen_server:cast(Session, Request).
 
 
 %% @doc Starts a session.
@@ -155,17 +175,17 @@ send_ack(WaitUntill, From) ->
 %% @private
 %%
 %% Store a message to be delivered later.
-handle_call({send, Msg, async}, _, #state{handler=undefined, messages=Messages} = State) ->
+handle_call(?send(Msg, async), _, #state{handler=undefined, messages=Messages} = State) ->
     Msgs = queue:in({async, undefined, Msg}, Messages),
     {reply, ok, State#state{messages=Msgs}};
 
 %% Store a message to be delivered and acknowledged later.
-handle_call({send, Msg, Type}, From, #state{handler=undefined, messages=Messages} = State) ->
+handle_call(?send(Msg, Type), From, #state{handler=undefined, messages=Messages} = State) ->
     Msgs = queue:in({Type, From, Msg}, Messages),
     {noreply, State#state{messages=Msgs}};
 
 %% Send a message to already subscribed handler, start inactivity timer.
-handle_call({send, Msg, Type}, From, #state{handler=Pid, ref=Ref} = State) ->
+handle_call(?send(Msg, Type), From, #state{handler=Pid, ref=Ref} = State) ->
     %% Subscription only happens when there are no messages in the queue.
     %% So the queue must be empty here, let's ensure that.
     true = queue:is_empty(State#state.messages),
@@ -175,7 +195,7 @@ handle_call({send, Msg, Type}, From, #state{handler=Pid, ref=Ref} = State) ->
 
 %% Stop inactivity timer. Subscribe if no messages to deliver,
 %% else send one message and start inactivity timer again.
-handle_call(recv, {Pid, _}, #state{handler=undefined, messages=Messages} = State) ->
+handle_call(?recv, {Pid, _}, #state{handler=undefined, messages=Messages} = State) ->
     cancel_timer(State#state.ref),
     NewState = case queue:out(Messages) of
                    {empty, _} ->
@@ -189,13 +209,29 @@ handle_call(recv, {Pid, _}, #state{handler=undefined, messages=Messages} = State
     {reply, Ref, NewState};
 
 %% Only one subscriber is allowed!
-handle_call(recv, {Pid, _}, #state{handler=Handler} = State) ->
+handle_call(?recv, {Pid, _}, #state{handler=Handler} = State) ->
     ?ERROR("~p subscribes to subscribed by ~p session", [Pid, Handler]),
     {reply, error, State};
 
-handle_call(Request, {Pid, _}, State) ->
-    ?ERROR("unexpected message ~p from ~p\n", [Request, Pid]),
-    {reply, error, State}.
+handle_call(Msg, From, #state{module=Module, state=MState} = State) ->
+    gen_reply(Module:handle_call(Msg, From, MState), State).
+
+
+gen_reply(Result, State) ->
+    case Result of
+        {reply, Reply, NState} ->
+            {reply, Reply, State#state{state=NState}};
+        {reply, Reply, NState, Timeout} ->
+            {reply, Reply, State#state{state=NState}, Timeout};
+        {noreply, NState} ->
+            {noreply, State#state{state=NState}};
+        {noreply, NState, Timeout} ->
+            {noreply, State#state{state=NState}, Timeout};
+        {stop, Reason, Reply, NState} ->
+            {stop, Reason, Reply, State#state{state=NState}};
+        {stop, Reason, NState} ->
+            {stop, Reason, State#state{state=NState}}
+    end.
 
 
 cancel_timer(Timer) ->
@@ -214,8 +250,8 @@ send_message(Pid, Ref, Msg, Type, From) ->
 
 
 %% @private
-handle_cast(_Msg, State) ->
-    {noreply, State}.
+handle_cast(Msg, #state{module=Module, state=MState} = State) ->
+    gen_reply(Module:handle_cast(Msg, MState), State).
 
 
 %% @private
@@ -224,19 +260,12 @@ handle_info(?inactive_message(Timer), #state{ref=Timer} = State) ->
 handle_info({'DOWN', Ref, _, _, _}, #state{ref=Ref} = State) ->
     {noreply, start_timer(State#state{handler=undefined})};
 handle_info(Info, #state{module=Module, state=MState} = State) ->
-    case Module:handle_info(Info, MState) of
-        {noreply, NState} ->
-            {noreply, State#state{state=NState}};
-        {noreply, NState, Timeout} ->
-            {noreply, State#state{state=NState}, Timeout};
-        {stop, Reason, NState} ->
-            {stop, Reason, State#state{state=NState}}
-    end.
+    gen_reply(Module:handle_info(Info, MState), State).
 
 
 %% @private
-terminate(Reason, #state{module=Module, state=MState}) ->
-    Module:terminate(Reason, MState).
+terminate(Reason, #state{module=Module, messages=Messages, state=MState}) ->
+    Module:terminate(Reason, Messages, MState).
 
 
 %% @private
