@@ -88,9 +88,10 @@ st() ->
 
 
 setup() ->
-    application:start(gproc),
+    ok = application:start(gproc),
+    ok = application:start(smullet),
     gproc:reg_shared(?last_state),
-    {ok, Pid} = smullet_sup:start_link(?GROUP, ?t, ?MODULE),
+    {ok, Pid} = smullet_group:start(?GROUP, ?MODULE, ?t, 1000),
     Pid.
 
 

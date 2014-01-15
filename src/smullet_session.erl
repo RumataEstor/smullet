@@ -44,7 +44,7 @@
                                                SessionKey :: term().
 new(SessionGroup, SessionKey) ->
     GProcKey = ?gproc_key(SessionGroup, SessionKey),
-    case smullet_sup:start_child(SessionGroup, GProcKey) of
+    case smullet_group:start_child(SessionGroup, GProcKey) of
         {error, {shutdown, Reason}} ->
             {error, Reason};
         Other ->
@@ -71,7 +71,7 @@ ensure_started(SessionGroup, SessionKey) ->
     GProcKey = ?gproc_key(SessionGroup, SessionKey),
     case gproc:where(GProcKey) of
         undefined ->
-            case smullet_sup:start_child(SessionGroup, GProcKey) of
+            case smullet_group:start_child(SessionGroup, GProcKey) of
                 {ok, Pid} ->
                     Pid;
                 {error, {already_registered, OtherPid}} ->
