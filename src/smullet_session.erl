@@ -103,13 +103,8 @@ send(Session, Msg, async) when is_pid(Session) ->
 send(Session, Msg, infinity) when is_pid(Session) ->
     gen_server:call(Session, ?send(Msg, infinity), infinity);
 send(Session, Msg, Timeout) when is_pid(Session) ->
-    WaitTill = milliseconds() + Timeout,
-    gen_server:call(Session, ?send(Msg, WaitTill), Timeout).
-
-
-milliseconds() ->
-    {Megas, Secs, Millis} = os:timestamp(),
-    (Megas * 1000000 + Secs) * 1000000 + Millis.
+    ReplyUntil = timestamp:add_micros(os:timestamp(), Timeout * 1000),
+    gen_server:call(Session, ?send(Msg, ReplyUntil), Timeout).
 
 
 %% @doc Subscribes calling process for a message delivery.
@@ -163,9 +158,9 @@ send_ack(async, _) ->
     ok;
 send_ack(infinity, From) ->
     gen_server:reply(From, ok);
-send_ack(WaitUntill, From) ->
-    case milliseconds() of
-        Milliseconds when Milliseconds < WaitUntill ->
+send_ack(ReplyUntil, From) ->
+    case os:timestamp() of
+        Now when Now < ReplyUntil ->
             gen_server:reply(From, ok);
         _ ->
             ok
