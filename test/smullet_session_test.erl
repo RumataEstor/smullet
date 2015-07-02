@@ -62,6 +62,12 @@ sessions() ->
     ?assertMatchEx(Ref3, is_reference(Ref3), smullet_session:recv(S1)),
     ?assertMatch({msg, {Ref3, m2}}, msg()),
 
+    %% send message from the session
+    Ref4 = make_ref(),
+    ?assertMatch(ok, smullet_session:call(S1, {send, Ref4})),
+    ?assertMatchEx(Ref5, is_reference(Ref5), smullet_session:recv(S1)),
+    ?assertMatch({msg, {Ref5, Ref4}}, msg()),
+
     %% session is terminated due to inactivity
     ?assertMatch(ok, timer:sleep(?t + ?t)),
     ?assertMatch(undefined, smullet_session:find(?GROUP, 1)),
@@ -76,6 +82,8 @@ init(?GROUP, Key) ->
     gproc:set_value_shared(?last_state, {init, Key}),
     {ok, undefined}.
 
+handle_call({send, Msg}, _, State) ->
+    {reply, smullet_session:send(Msg), State};
 handle_call(_, _, State) ->
     {noreply, State}.
 

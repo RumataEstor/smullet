@@ -5,6 +5,7 @@
 -export([start_link/3]).
 -export([new/2, ensure_started/2]).
 -export([find/2, send/3, recv/1]).
+-export([send/1]).
 -export([call/2, call/3, cast/2]).
 
 %% gen_server callbacks
@@ -41,6 +42,7 @@
 -define(gproc_key(Group, Key), {n, l, {smullet, Group, Key}}).
 -define(inactive_message(Timer), {timeout, Timer, inactive_message}).
 -define(send(Msg, Type), {'$smullet_send', Msg, Type}).
+-define(send(Msg), {'$smullet_send', Msg}).
 -define(recv, '$smullet_recv').
 
 
@@ -103,13 +105,13 @@ send(Session, Msg, async) when is_pid(Session) ->
 send(Session, Msg, infinity) when is_pid(Session) ->
     gen_server:call(Session, ?send(Msg, infinity), infinity);
 send(Session, Msg, Timeout) when is_pid(Session) ->
-    WaitTill = milliseconds() + Timeout,
-    gen_server:call(Session, ?send(Msg, WaitTill), Timeout).
+    ReplyUntil = timestamp:add_micros(os:timestamp(), Timeout * 1000),
+    gen_server:call(Session, ?send(Msg, ReplyUntil), Timeout).
 
 
-milliseconds() ->
-    {Megas, Secs, Millis} = os:timestamp(),
-    (Megas * 1000000 + Secs) * 1000000 + Millis.
+%% @doc The same as `send(self(), Msg, async)' but doesn't hang.
+send(Msg) ->
+    gen_server:cast(self(), ?send(Msg)).
 
 
 %% @doc Subscribes calling process for a message delivery.
@@ -163,35 +165,39 @@ send_ack(async, _) ->
     ok;
 send_ack(infinity, From) ->
     gen_server:reply(From, ok);
-send_ack(WaitUntill, From) ->
-    case milliseconds() of
-        Milliseconds when Milliseconds < WaitUntill ->
+send_ack(ReplyUntil, From) ->
+    case os:timestamp() of
+        Now when Now < ReplyUntil ->
             gen_server:reply(From, ok);
         _ ->
             ok
     end.
 
 
-%% @private
-%%
-%% Store a message to be delivered later.
-handle_call(?send(Msg, async), _, #state{handler=undefined, messages=Messages} = State) ->
-    Msgs = queue:in({async, undefined, Msg}, Messages),
-    {reply, ok, State#state{messages=Msgs}};
-
 %% Store a message to be delivered and acknowledged later.
-handle_call(?send(Msg, Type), From, #state{handler=undefined, messages=Messages} = State) ->
+send(Msg, Type, From, #state{handler=undefined, messages=Messages} = State) ->
     Msgs = queue:in({Type, From, Msg}, Messages),
-    {noreply, State#state{messages=Msgs}};
+    State#state{messages=Msgs};
 
 %% Send a message to already subscribed handler, start inactivity timer.
-handle_call(?send(Msg, Type), From, #state{handler=Pid, ref=Ref} = State) ->
+send(Msg, Type, From, #state{handler=Pid, ref=Ref} = State) ->
     %% Subscription only happens when there are no messages in the queue.
     %% So the queue must be empty here, let's ensure that.
     true = queue:is_empty(State#state.messages),
     erlang:demonitor(Ref),
     send_message(Pid, Ref, Msg, Type, From),
-    {noreply, start_timer(State#state{handler=undefined})};
+    start_timer(State#state{handler=undefined}).
+
+
+%% @private
+%%
+%% Async send is acknowledged immediately.
+handle_call(?send(Msg, async), _, State) ->
+    {reply, ok, send(Msg, async, undefined, State)};
+
+%% Synchronous send is acknowledged on delivery.
+handle_call(?send(Msg, Type), From, State) ->
+    {noreply, send(Msg, Type, From, State)};
 
 %% Stop inactivity timer. Subscribe if no messages to deliver,
 %% else send one message and start inactivity timer again.
@@ -250,6 +256,8 @@ send_message(Pid, Ref, Msg, Type, From) ->
 
 
 %% @private
+handle_cast(?send(Msg), State) ->
+    {noreply, send(Msg, async, undefined, State)};
 handle_cast(Msg, #state{module=Module, state=MState} = State) ->
     gen_reply(Module:handle_cast(Msg, MState), State).
 
