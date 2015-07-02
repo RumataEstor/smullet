@@ -11,8 +11,9 @@
 -callback session(SessionId) -> {ok, Session} | not_found
                                     when SessionId :: term(),
                                          Session :: smullet_session:session().
--callback info(Msg) -> {reply, Data} | ok
+-callback info(Msg, SessionId) -> {reply, Data} | ok
                            when Msg :: term(),
+				 SessionId :: term(),
                                 Data :: iodata().
 -callback stream(Data, SessionId) -> {reply, Data} | ok
                                          when Data :: iodata(),
@@ -51,16 +52,16 @@ stream(Data, Req, #state{handler=Handler, session_id=SessionId} = State) ->
     end.
 
 
-info({Ref, Info}, Req, #state{ref=Ref, handler=Handler} = State)
+info({Ref, Info}, Req, #state{ref=Ref, handler=Handler, session_id=SessionId} = State)
   when Ref =/= undefined ->
-    case Handler:info(Info) of
+    case Handler:info(Info, SessionId) of
         {reply, Msg} ->
             {reply, Msg, Req, resubscribe(State)};
         ok ->
             {ok, Req, resubscribe(State)}
     end;
-info(Info, Req, #state{handler=Handler}=State) ->
-    case Handler:info(Info) of
+info(Info, Req, #state{handler=Handler, session_id=SessionId}=State) ->
+    case Handler:info(Info, SessionId) of
         {reply, Msg} ->
             {reply, Msg, Req, State};
         ok ->
