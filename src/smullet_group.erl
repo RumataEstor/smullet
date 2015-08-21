@@ -3,7 +3,7 @@
 
 %% API
 -export([start/4, start/3, stop/1]).
--export([start_child/2]).
+-export([start_child/3]).
 -export([start_link/4]).
 
 %% Supervisor callbacks
@@ -32,8 +32,8 @@ group_to_sup(Group) ->
     list_to_atom(GroupId).
 
 
-start_child(Group, Key) ->
-    supervisor:start_child(group_to_sup(Group), [Key]).
+start_child(Group, Key, Init) ->
+    supervisor:start_child(group_to_sup(Group), [Key, Init]).
 
 
 init({Module, SessionTimeout, ShutdownTimeout}) ->
