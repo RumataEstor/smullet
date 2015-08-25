@@ -11,9 +11,8 @@
 -callback session(SessionId) -> {ok, Session} | not_found
                                     when SessionId :: term(),
                                          Session :: smullet_session:session().
--callback info(Msg, SessionId) -> {reply, Data} | ok
+-callback info(Msg) -> {reply, Data} | ok
                            when Msg :: term(),
-				 SessionId :: term(),
                                 Data :: iodata().
 -callback stream(Data, SessionId) -> {reply, Data} | ok
                                          when Data :: iodata(),
@@ -52,19 +51,35 @@ stream(Data, Req, #state{handler=Handler, session_id=SessionId} = State) ->
     end.
 
 
-info({Ref, Info}, Req, #state{ref=Ref, handler=Handler, session_id=SessionId} = State)
+info({Ref, Info}, Req, #state{ref=Ref, handler=Handler} = State)
   when Ref =/= undefined ->
-    case Handler:info(Info, SessionId) of
+    case Handler:info(Info) of
         {reply, Msg} ->
             {reply, Msg, Req, resubscribe(State)};
         ok ->
             {ok, Req, resubscribe(State)}
     end;
-info(Info, Req, #state{handler=Handler, session_id=SessionId}=State) ->
-    case Handler:info(Info, SessionId) of
+
+info({'DOWN', Ref, process, _Pid, Reason}, Req, #state{ref=Ref} = State)
+  when Ref =/= undefined ->
+    session_terminated(Reason, Req, State#state{ref=undefined, session=undefined});
+
+info(Info, Req, #state{handler=Handler}=State) ->
+    case Handler:info(Info) of
         {reply, Msg} ->
             {reply, Msg, Req, State};
         ok ->
+            {ok, Req, State}
+    end.
+
+
+session_terminated(Reason, Req, #state{handler=Handler} = State) ->
+    try Handler:terminate(Reason) of
+        {reply, Msg} ->
+            {reply, Msg, Req, State};
+        ok ->
+            {ok, Req, State}
+    catch error:undef ->
             {ok, Req, State}
     end.
 
