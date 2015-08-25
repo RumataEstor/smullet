@@ -59,11 +59,27 @@ info({Ref, Info}, Req, #state{ref=Ref, handler=Handler} = State)
         ok ->
             {ok, Req, resubscribe(State)}
     end;
+
+info({'DOWN', Ref, process, _Pid, Reason}, Req, #state{ref=Ref} = State)
+  when Ref =/= undefined ->
+    session_terminated(Reason, Req, State#state{ref=undefined, session=undefined});
+
 info(Info, Req, #state{handler=Handler}=State) ->
     case Handler:info(Info) of
         {reply, Msg} ->
             {reply, Msg, Req, State};
         ok ->
+            {ok, Req, State}
+    end.
+
+
+session_terminated(Reason, Req, #state{handler=Handler} = State) ->
+    try Handler:terminate(Reason) of
+        {reply, Msg} ->
+            {reply, Msg, Req, State};
+        ok ->
+            {ok, Req, State}
+    catch error:undef ->
             {ok, Req, State}
     end.
 

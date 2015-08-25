@@ -37,14 +37,14 @@
 -opaque session() :: pid().
 -export_type([session/0]).
 
--record(state, {handler, module, state, messages, timeout, ref}).
+-record(state, {receiver, module, state, messages, timeout, ref}).
 -define(ERROR(Format, Params), error_logger:error_msg("[~p:~p ~p] " ++ Format,
                                                       [?MODULE, ?LINE, self()] ++ Params)).
 -define(gproc_key(Group, Key), {n, l, {smullet, Group, Key}}).
 -define(inactive_message(Timer), {timeout, Timer, inactive_message}).
 -define(send(Msg, Type), {'$smullet_send', Msg, Type}).
 -define(send(Msg), {'$smullet_send', Msg}).
--define(recv, '$smullet_recv').
+-define(recv(Tag), {'$smullet_recv', Tag}).
 
 
 %% @doc Creates a new session under specified supervisor using SessionKey.
@@ -124,7 +124,8 @@ send(Msg) ->
 %%      message queue as `{Tag, Msg}'.
 -spec recv(session()) -> Tag when Tag :: reference().
 recv(Session) when is_pid(Session) ->
-    gen_server:call(Session, ?recv).
+    Tag = erlang:monitor(process, Session),
+    gen_server:call(Session, ?recv(Tag)).
 
 
 %% @doc The same as `gen_server:call/2'.
@@ -180,18 +181,18 @@ send_ack(ReplyUntil, From) ->
 
 
 %% Store a message to be delivered and acknowledged later.
-send(Msg, Type, From, #state{handler=undefined, messages=Messages} = State) ->
+send(Msg, Type, From, #state{receiver=undefined, messages=Messages} = State) ->
     Msgs = queue:in({Type, From, Msg}, Messages),
     State#state{messages=Msgs};
 
 %% Send a message to already subscribed handler, start inactivity timer.
-send(Msg, Type, From, #state{handler=Pid, ref=Ref} = State) ->
+send(Msg, Type, Sender, #state{receiver=Receiver, ref=Ref} = State) ->
     %% Subscription only happens when there are no messages in the queue.
     %% So the queue must be empty here, let's ensure that.
     true = queue:is_empty(State#state.messages),
     erlang:demonitor(Ref),
-    send_message(Pid, Ref, Msg, Type, From),
-    start_timer(State#state{handler=undefined}).
+    send_message(Receiver, Msg, Type, Sender),
+    start_timer(State#state{receiver=undefined}).
 
 
 %% @private
@@ -206,22 +207,22 @@ handle_call(?send(Msg, Type), From, State) ->
 
 %% Stop inactivity timer. Subscribe if no messages to deliver,
 %% else send one message and start inactivity timer again.
-handle_call(?recv, {Pid, _}, #state{handler=undefined, messages=Messages} = State) ->
+handle_call(?recv(Tag), {Pid, _}, #state{receiver=undefined, messages=Messages} = State) ->
     cancel_timer(State#state.ref),
+    Receiver = {Pid, Tag},
     NewState = case queue:out(Messages) of
                    {empty, _} ->
                        Ref = erlang:monitor(process, Pid),
-                       State#state{handler=Pid, ref=Ref};
-                   {{value, {Type, From, Msg}}, Msgs} ->
-                       Ref = make_ref(),
-                       send_message(Pid, Ref, Msg, Type, From),
+                       State#state{receiver=Receiver, ref=Ref};
+                   {{value, {Type, Sender, Msg}}, Msgs} ->
+                       send_message(Receiver, Msg, Type, Sender),
                        start_timer(State#state{messages=Msgs})
                end,
-    {reply, Ref, NewState};
+    {reply, Tag, NewState};
 
 %% Only one subscriber is allowed!
-handle_call(?recv, {Pid, _}, #state{handler=Handler} = State) ->
-    ?ERROR("~p subscribes to subscribed by ~p session", [Pid, Handler]),
+handle_call(?recv(_), {Pid, _}, #state{receiver=Receiver} = State) ->
+    ?ERROR("~p subscribes to subscribed by ~p session", [Pid, Receiver]),
     {reply, error, State};
 
 handle_call(Msg, From, #state{module=Module, state=MState} = State) ->
@@ -246,18 +247,22 @@ gen_reply(Result, State) ->
 
 
 cancel_timer(Timer) ->
-    erlang:cancel_timer(Timer),
-    receive
-        ?inactive_message(Timer) ->
-            ok
-    after 0 ->
+    case erlang:cancel_timer(Timer) of
+        false ->
+            receive
+                ?inactive_message(Timer) ->
+                    ok
+            after 0 ->
+                    ok
+            end;
+        _ ->
             ok
     end.
 
 
-send_message(Pid, Ref, Msg, Type, From) ->
-    Pid ! {Ref, Msg},
-    send_ack(Type, From).
+send_message(Receiver, Msg, Type, Sender) ->
+    gen_server:reply(Receiver, Msg),
+    send_ack(Type, Sender).
 
 
 %% @private
@@ -271,7 +276,7 @@ handle_cast(Msg, #state{module=Module, state=MState} = State) ->
 handle_info(?inactive_message(Timer), #state{ref=Timer} = State) ->
     {stop, {shutdown, inactive}, State};
 handle_info({'DOWN', Ref, _, _, _}, #state{ref=Ref} = State) ->
-    {noreply, start_timer(State#state{handler=undefined})};
+    {noreply, start_timer(State#state{receiver=undefined})};
 handle_info(Info, #state{module=Module, state=MState} = State) ->
     gen_reply(Module:handle_info(Info, MState), State).
 
